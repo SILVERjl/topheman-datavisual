@@ -2,6 +2,10 @@ var socketMaxAge = require('../../config/environment').socketMaxAge;
 var socketMaxAgeAlertBefore = require('../../config/environment').socketMaxAgeAlertBefore;
 var cleanSocketsDelay = require('../../config/environment').cleanSocketsDelay;
 
+// Dependencies
+var mongoose        = require('mongoose');
+var Tweet            = require('../../model.js');
+
 if(socketMaxAgeAlertBefore > socketMaxAge){
   throw new Error("socketMaxAgeAlertBefore > socketMaxAge - must be lesser than. socketMaxAgeAlertBefore : "+socketMaxAgeAlertBefore+", socketMaxAge : "+socketMaxAge);
 }
@@ -53,10 +57,28 @@ var SocketsManager = function(io, twitterStreamManager){
     return {
       id : tweet.id,
       text : tweet.text,
+      screen_name: tweet.user.screen_name,
+      created_at : tweet.created_at,
+      coordinates : tweet.coordinates["coordinates"],
+      profile_image_url:  tweet.user.profile_image_url,
       $channels : tweet.$channels,
-      $keywords : tweet.$keywords
+      $keywords : tweet.$keywords,
+      keywords: tweet.$keywords //This is for the model, can't use $
     };
   };
+
+  // MongoDB evaluates Long/Lat instead of Lat/Long.  So for DB only swap them.
+  var swapTweetCoordinates = function (tweet) {
+    console.log("swapTweetCoordinates... " +  JSON.stringify(tweet.coordinates));
+
+    var tmpLat = tweet.coordinates[0];
+    var tmpLon = tweet.coordinates[1];
+
+    tweet.coordinates[0] = tmpLon;
+    tweet.coordinates[1] = tmpLat;
+    console.log("SWAPPED... " +  JSON.stringify(tweet.coordinates));
+    return tweet;
+  }
   
   var manageEventsBetweenTwitterAndSockets = function(stream){
     stream.on('connect',function(){
@@ -76,7 +98,27 @@ var SocketsManager = function(io, twitterStreamManager){
       io.emit('twitter:connected',{twitterState:twitterState});
     });
     stream.on('channels',function(tweet){
-      io.emit('data',reformatTweet(tweet));
+      //console.log("Tweet : " + tweet.text + ", " + JSON.stringify(tweet));
+      if (tweet.coordinates != null) {
+        // Remove unnecessary JSON data
+        var broadcastTweet = reformatTweet(tweet);
+
+        var dbTweet = swapTweetCoordinates(broadcastTweet);
+        // Creates a new Tweet based on the Mongoose schema and the post body
+        var newtweet = new Tweet(dbTweet);
+
+        // New Tweet is saved in the db.
+        newtweet.save(function(err){
+            if(err) {
+              console.log("error = " + err);
+              return;
+            }
+            // If no errors are found
+            // console.log("successful save");
+        });
+
+        io.emit('data',broadcastTweet);
+      }
     });
   };
   
